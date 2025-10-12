@@ -12,7 +12,7 @@
 #define CHARSET "abcdefghijklmnopqrstuvwxyz0123456789"
 #define CHARSET_SIZE 36
 // --- CHANGED: Smaller chunk size for better responsiveness ---
-#define WORK_CHUNK_SIZE 100000
+#define WORK_CHUNK_SIZE 10000
 #define TAG_WORK_REQUEST 1
 #define TAG_WORK_ASSIGNMENT 2
 #define TAG_NO_MORE_WORK 3
