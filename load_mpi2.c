@@ -1,5 +1,5 @@
-// File: cracker_dynamic_final.c
-// To compile: mpicc cracker_dynamic_final.c -o load_mpi -lcrypt
+// File: cracker_dynamic_debug.c
+// To compile: mpicc cracker_dynamic_debug.c -o load_mpi -lcrypt
 
 #include <mpi.h>
 #include <stdio.h>
@@ -11,12 +11,13 @@
 #define MAX_PASSWORD_LENGTH 6
 #define CHARSET "abcdefghijklmnopqrstuvwxyz0123456789"
 #define CHARSET_SIZE 36
+// --- CHANGED: Smaller chunk size for better responsiveness ---
 #define WORK_CHUNK_SIZE 100000
 #define TAG_WORK_REQUEST 1
 #define TAG_WORK_ASSIGNMENT 2
 #define TAG_NO_MORE_WORK 3
 #define TAG_PASSWORD_FOUND 4
-#define TAG_GLOBAL_STOP 5 // New tag for the instant stop signal
+#define TAG_GLOBAL_STOP 5 // Signal for instant stop
 
 // (generate_password, calculate_combinations, and check_password are unchanged)
 void generate_password(long long index, char *password, int length) {
@@ -86,19 +87,21 @@ void manager_main(int size, const char* target_hash, double global_start_time) {
                 printf("  [%.4fs] [Manager] Received FOUND signal from Process %d. Entering shutdown mode.\n", MPI_Wtime() - global_start_time, worker_rank);
                 fflush(stdout);
                 
-                // Now that it's found, just listen for other workers and tell them to stop
-                // This replaces the previous logic.
+                // Tell all workers the job is completely done
                 for (int i = 1; i < size; i++) {
                     MPI_Send(0, 0, MPI_INT, i, TAG_GLOBAL_STOP, MPI_COMM_WORLD);
                 }
-                // All workers have been told to stop, so we can exit the loop.
                 workers_finished = size - 1;
 
             } else if (status.MPI_TAG == TAG_WORK_REQUEST) {
+                printf("  [%.4fs] [Manager] Received work request from Process %d.\n", MPI_Wtime() - global_start_time, worker_rank);
+                fflush(stdout);
                 if (next_start_index >= total_combinations) {
                     MPI_Send(0, 0, MPI_INT, worker_rank, TAG_NO_MORE_WORK, MPI_COMM_WORLD);
                     workers_finished++;
                 } else {
+                    printf("  [%.4fs] [Manager] Assigning work starting at %lld to Process %d.\n", MPI_Wtime() - global_start_time, next_start_index, worker_rank);
+                    fflush(stdout);
                     MPI_Send(&next_start_index, 1, MPI_LONG_LONG, worker_rank, TAG_WORK_ASSIGNMENT, MPI_COMM_WORLD);
                     next_start_index += WORK_CHUNK_SIZE;
                 }
@@ -131,24 +134,30 @@ void worker_main(int rank, const char* target_hash, double global_start_time) {
             MPI_Recv(&start_index, 1, MPI_LONG_LONG, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 
             if (status.MPI_TAG == TAG_NO_MORE_WORK) {
-                break; // Manager told me to stop for THIS length.
+                printf("  [%.4fs] [Process %d] Received NO MORE WORK signal for length %d.\n", MPI_Wtime() - global_start_time, rank, len);
+                fflush(stdout);
+                break; 
             }
             if (status.MPI_TAG == TAG_GLOBAL_STOP) {
+                printf("  [%.4fs] [Process %d] Received GLOBAL STOP signal.\n", MPI_Wtime() - global_start_time, rank);
+                fflush(stdout);
                 should_exit_completely = 1;
-                break; // Manager told me the entire job is done.
+                break;
             }
+            
+            printf("  [%.4fs] [Process %d] Received work. Starting search from %lld.\n", MPI_Wtime() - global_start_time, rank, start_index);
+            fflush(stdout);
 
             long long end_index = start_index + WORK_CHUNK_SIZE;
             int found_in_chunk = 0;
             for (long long i = start_index; i < end_index && i < calculate_combinations(len); i++) {
-                // --- FIX: INSTANT STOP CHECK ---
-                // Periodically check if a stop message has arrived, without blocking.
+                // Periodically check if a stop message has arrived
                 if (i > start_index && i % 5000 == 0) {
                     int flag = 0;
                     MPI_Iprobe(0, TAG_GLOBAL_STOP, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
                     if (flag) {
                         should_exit_completely = 1;
-                        break; // Stop working on this chunk immediately
+                        break;
                     }
                 }
 
@@ -159,7 +168,7 @@ void worker_main(int rank, const char* target_hash, double global_start_time) {
                     MPI_Send(&dummy, 1, MPI_LONG_LONG, 0, TAG_PASSWORD_FOUND, MPI_COMM_WORLD);
                     MPI_Send(password, strlen(password) + 1, MPI_CHAR, 0, TAG_PASSWORD_FOUND, MPI_COMM_WORLD);
                     found_in_chunk = 1;
-                    should_exit_completely = 1; // I found it, so I should exit
+                    should_exit_completely = 1;
                     break;
                 }
             }
@@ -170,6 +179,8 @@ void worker_main(int rank, const char* target_hash, double global_start_time) {
             
             // Finished my chunk, ask for another for this length.
             long long dummy_request = 0;
+            printf("  [%.4fs] [Process %d] Finished chunk. Requesting next.\n", MPI_Wtime() - global_start_time, rank);
+            fflush(stdout);
             MPI_Send(&dummy_request, 1, MPI_LONG_LONG, 0, TAG_WORK_REQUEST, MPI_COMM_WORLD);
         }
         MPI_Barrier(MPI_COMM_WORLD);
@@ -206,10 +217,7 @@ int main(int argc, char *argv[]) {
     } else {
         worker_main(rank, target_hash, global_start_time);
     }
-
-    // --- FIX: CLEAN EXIT ---
-    // All processes, manager and worker, will naturally arrive here after their main loops are complete.
-    // The barrier ensures no process terminates early.
+    
     MPI_Barrier(MPI_COMM_WORLD);
     
     MPI_Finalize();
