@@ -1,5 +1,5 @@
-// File: cracker_final_safe_timed.c
-// To compile: mpicc cracker_final_safe_timed.c -o crmpi -lcrypt
+// File: cracker_final_report.c
+// To compile: mpicc cracker_final_report.c -o crmpi -lcrypt
 
 #include <mpi.h>
 #include <stdio.h>
@@ -92,42 +92,43 @@ int main(int argc, char *argv[]) {
             if (check_password(password, target_hash)) {
                 strcpy(found_password, password);
                 password_found = 1;
-                // No break here; let the sync point handle the exit.
             }
 
             passwords_in_batch++;
             double current_time = MPI_Wtime();
 
-            // --- SAFE, TIME-BASED PROGRESS AND STOP CHECK ---
             if ((current_time - last_update_time >= PROGRESS_UPDATE_SECONDS) || password_found) {
                 long long batch_sum = 0;
-                // Step 1: All processes must participate to sum up the work done.
                 MPI_Allreduce(&passwords_in_batch, &batch_sum, 1, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
 
                 if (rank == 0) {
                     total_checked_for_len += batch_sum;
-                    printf("\rTrying length %d (%lld combinations)... Progress: %.2f%%", len, total_combinations,
-                           (double)total_checked_for_len / total_combinations * 100.0);
+                    // --- FIX: Cap the count to prevent exceeding 100% ---
+                    if (total_checked_for_len > total_combinations) {
+                        total_checked_for_len = total_combinations;
+                    }
+                    // --- CHANGE: Added (checked/total) to the output ---
+                    printf("\rTrying length %d... Progress: %.2f%% (%lld/%lld)", len,
+                           (double)total_checked_for_len / total_combinations * 100.0,
+                           total_checked_for_len, total_combinations);
                     fflush(stdout);
                 }
                 passwords_in_batch = 0;
                 last_update_time = current_time;
 
-                // Step 2: Now that all processes are synchronized, check if anyone found the password.
                 MPI_Allreduce(&password_found, &global_found, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
                 if (global_found) {
-                    break; // All processes will break out of the loop together safely.
+                    break;
                 }
             }
         }
 
-        // Final sync point at the end of the length to ensure 100% is shown
         if (!global_found) {
             long long final_batch_sum = 0;
             MPI_Allreduce(&passwords_in_batch, &final_batch_sum, 1, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
             if (rank == 0) {
                 total_checked_for_len += final_batch_sum;
-                printf("\rTrying length %d (%lld combinations)... Progress: 100.00%%\n", len, total_combinations);
+                printf("\rTrying length %d... Progress: 100.00%% (%lld/%lld)\n", len, total_combinations, total_combinations);
                 fflush(stdout);
             }
             MPI_Allreduce(&password_found, &global_found, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
@@ -137,14 +138,7 @@ int main(int argc, char *argv[]) {
     end_time = MPI_Wtime();
 
     if (global_found) {
-        if (rank == 0 && password_found == 0) {
-             printf("\n"); // Add a newline if another process found the password
-        } else if (rank != 0 && password_found == 1) {
-            // Silence other workers to keep output clean
-        } else if(rank==0 && password_found==1){
-             printf("\n");
-        }
-
+        if (rank == 0) printf("\n"); // Cleanly separate progress bar from final output
 
         char all_passwords[MAX_PROCESSES][MAX_PASSWORD_LENGTH + 1];
         memset(all_passwords, 0, sizeof(all_passwords));
