@@ -1,5 +1,5 @@
-// File: cracker_final_report.c
-// To compile: mpicc cracker_final_report.c -o crmpi -lcrypt
+// File: cracker_final_progressbar.c
+// To compile: mpicc cracker_final_progressbar.c -o crmpi -lcrypt
 
 #include <mpi.h>
 #include <stdio.h>
@@ -14,6 +14,8 @@
 #define MAX_PROCESSES 256
 // --- The desired update frequency in seconds ---
 #define PROGRESS_UPDATE_SECONDS 0.5
+// --- The visual width of the progress bar in characters ---
+#define PROGRESS_BAR_WIDTH 50
 
 void generate_password(long long index, char *password, int length) {
     for (int i = length - 1; i >= 0; i--) {
@@ -103,14 +105,19 @@ int main(int argc, char *argv[]) {
 
                 if (rank == 0) {
                     total_checked_for_len += batch_sum;
-                    // --- FIX: Cap the count to prevent exceeding 100% ---
                     if (total_checked_for_len > total_combinations) {
                         total_checked_for_len = total_combinations;
                     }
-                    // --- CHANGE: Added (checked/total) to the output ---
-                    printf("\rTrying length %d... Progress: %.2f%% (%lld/%lld)", len,
-                           (double)total_checked_for_len / total_combinations * 100.0,
-                           total_checked_for_len, total_combinations);
+                    
+                    // --- NEW: Progress Bar Drawing Logic ---
+                    float percentage = (float)total_checked_for_len / total_combinations;
+                    int bar_fill = percentage * PROGRESS_BAR_WIDTH;
+                    
+                    printf("\rTrying length %d... [", len);
+                    for (int b = 0; b < bar_fill; b++) printf("=");
+                    if (bar_fill < PROGRESS_BAR_WIDTH) printf(">");
+                    for (int b = 0; b < PROGRESS_BAR_WIDTH - bar_fill - 1; b++) printf(" ");
+                    printf("] %.2f%%", percentage * 100.0);
                     fflush(stdout);
                 }
                 passwords_in_batch = 0;
@@ -127,8 +134,10 @@ int main(int argc, char *argv[]) {
             long long final_batch_sum = 0;
             MPI_Allreduce(&passwords_in_batch, &final_batch_sum, 1, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
             if (rank == 0) {
-                total_checked_for_len += final_batch_sum;
-                printf("\rTrying length %d... Progress: 100.00%% (%lld/%lld)\n", len, total_combinations, total_combinations);
+                // --- NEW: Final 100% Progress Bar ---
+                printf("\rTrying length %d... [", len);
+                for (int b = 0; b < PROGRESS_BAR_WIDTH; b++) printf("=");
+                printf("] 100.00%%\n");
                 fflush(stdout);
             }
             MPI_Allreduce(&password_found, &global_found, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
@@ -138,7 +147,7 @@ int main(int argc, char *argv[]) {
     end_time = MPI_Wtime();
 
     if (global_found) {
-        if (rank == 0) printf("\n"); // Cleanly separate progress bar from final output
+        if (rank == 0) printf("\n");
 
         char all_passwords[MAX_PROCESSES][MAX_PASSWORD_LENGTH + 1];
         memset(all_passwords, 0, sizeof(all_passwords));
